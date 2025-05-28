@@ -1,69 +1,102 @@
-// // server.js
+// server.js
 
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables from .env
+
 const express = require('express');
 const mongoose = require('mongoose');
-const bodyParser = require('body-parser');
 const multer = require('multer');
+const bodyParser = require('body-parser');
 const path = require('path');
+const fs = require('fs');
+const dotenv = require('dotenv');
 const User = require('./models/User');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// MongoDB connection
+mongoose.connect(process.env.MONGO_URI, {
+}).then(() => {
+  console.log('✅ Connected to MongoDB');
+}).catch((err) => {
+  console.error('❌ MongoDB connection error:', err);
+});
+
+// Define user schema
+const userSchema = new mongoose.Schema({
+  uid: String,
+  name: String,
+  matricNo: String,
+  phone: String,
+  photoPath: String
+});
+const User = mongoose.model('User', userSchema);
+
 // Middleware
-app.use(express.static('public'));
-app.use('/uploads', express.static('uploads'));
-app.use(bodyParser.urlencoded({ extended: false }));
 app.set('view engine', 'ejs');
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('✅ Connected to MongoDB'))
-.catch((err) => console.error('❌ MongoDB connection error:', err));
+// Setup multer for file upload
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
-// Configure Multer for photo upload
 const storage = multer.diskStorage({
-  destination: './uploads/',
+  destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueName + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage });
+const upload = multer({ storage: storage });
 
-// Route to show registration form with UID
-app.get('/register', (req, res) => {
-  const uid = req.query.uid;
-  if (!uid) return res.status(400).send('Missing UID in query.');
-  res.render('register', { uid });
+// Show registration form
+app.get('/register', async (req, res) => {
+  const { uid } = req.query;
+
+  if (!uid) return res.status(400).send('UID not provided.');
+
+  // Check if user already registered
+  const user = await User.findOne({ uid });
+
+  if (user) {
+    res.send(`👋 Hello ${user.name}, you are already registered.`);
+  } else {
+    res.render('register', { uid });
+  }
 });
 
-// Handle form submission
+// Handle POST registration form submission
 app.post('/register', upload.single('photo'), async (req, res) => {
-  const { name, matric, phone, uid } = req.body;
-  const photo = req.file ? req.file.path : null;
-
   try {
-    const existing = await User.findOne({ uid });
-    if (existing) return res.send('User already registered.');
+    const { uid, name, matricNo, phone } = req.body;
+    const photoPath = req.file ? req.file.path : null;
 
-    const newUser = new User({ uid, name, matric, phone, photo });
-    await newUser.save();
-    res.render('success', { name });
-  } catch (error) {
-    res.status(500).send('Registration failed.');
+    if (!uid || !name || !matricNo || !phone || !photoPath) {
+      return res.status(400).send('Missing required fields.');
+    }
+
+    // Check if already registered
+    const existingUser = await User.findOne({ uid });
+    if (existingUser) {
+      return res.send(`⚠️ UID already registered to ${existingUser.name}`);
+    }
+
+    const user = new User({ uid, name, matricNo, phone, photo });
+    await user.save();
+
+    res.send(`✅ Registration successful for ${name}`);
+  } catch (err) {
+    console.error('❌ Registration error:', err);
+    res.status(500).send('Internal Server Error');
   }
 });
 
-// Home route
+// Home redirect (optional)
 app.get('/', (req, res) => {
-  res.send('Welcome to NFC Registration Portal');
+  res.send('NFC Registration Portal is live');
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server is running at http://localhost:${PORT}`);
 });
