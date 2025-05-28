@@ -136,86 +136,105 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const path = require('path');
 const multer = require('multer');
-const bodyParser = require('body-parser');
-const { exec } = require('child_process');
-const fs = require('fs');
-const User = require('./models/User'); // 👈 Make sure this file exists
+const axios = require('axios');
+const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.static('public'));
 app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
 
-// Multer setup for file upload
-const storage = multer.diskStorage({
-  destination: './uploads/',
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
-});
+// Multer config for handling photo upload
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// MongoDB connection
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => console.error('❌ MongoDB connection error:', err));
+// MongoDB Connection
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log('✅ Connected to MongoDB'))
+  .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// Home route
-app.get('/', (req, res) => {
-  res.send('Welcome to the NFC registration system');
+// User Schema
+const userSchema = new mongoose.Schema({
+  uid: { type: String, unique: true, required: true },
+  name: String,
+  matric: String,
+  phone: String,
+  photo: {
+    data: Buffer,
+    contentType: String,
+  },
+  faceEncoded: Boolean,
 });
 
-// Registration form
-app.get('/register', (req, res) => {
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+
+// Routes
+app.get('/', (req, res) => {
   const uid = req.query.uid;
-  if (!uid) return res.send("UID missing in query");
+  if (!uid) return res.status(400).send('UID missing in QR link');
   res.render('register', { uid });
 });
 
-// Handle registration
 app.post('/register', upload.single('photo'), async (req, res) => {
   const { uid, name, matric, phone } = req.body;
 
   try {
-    const existing = await User.findOne({ uid });
-    if (existing) return res.send('This card is already registered.');
-
-    const newUser = new User({ uid, name, matric, phone });
-    await newUser.save();
-
-    // Trigger Python face capture script
-    exec(`python3 face_capture.py ${uid}`, (err, stdout, stderr) => {
-      if (err) {
-        console.error(`Face capture error: ${stderr}`);
-        return res.render('retry', { message: 'Face not detected. Please try again.', uid });
-      }
-      console.log(`Face capture success: ${stdout}`);
-      res.redirect('/success');
+    // Save user info and photo to MongoDB
+    const newUser = new User({
+      uid,
+      name,
+      matric,
+      phone,
+      photo: {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+      },
+      faceEncoded: false,
     });
+    await newUser.save();
+    console.log(`✅ Registered: ${name}`);
 
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).send('Internal Server Error');
+    // Trigger Raspberry Pi Face Capture API
+    const piApiUrl = process.env.FACE_CAPTURE_API_URL;
+    try {
+      const response = await axios.post(piApiUrl, { uid });
+      console.log('🎯 Face capture triggered:', response.data);
+    } catch (faceErr) {
+      console.error('❌ Failed to trigger face capture:', faceErr.message);
+    }
+
+    res.render('success', { name });
+  } catch (err) {
+    console.error('❌ Registration failed:', err);
+    res.status(500).render('retry', { error: 'Registration failed. Please try again.' });
   }
 });
 
-// Success page
-app.get('/success', (req, res) => {
-  res.render('success');
-});
-
-// Retry page
+// Retry UI handler
 app.get('/retry', (req, res) => {
-  const { uid } = req.query;
-  res.render('retry', { message: 'Face not detected. Please try again.', uid });
+  const uid = req.query.uid;
+  res.render('retry', { uid });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running at http://localhost:${PORT}`);
+// Server start
+app.listen(port, () => {
+  console.log(`🚀 Server is running at http://localhost:${port}`);
+});
+
+app.get('/test-pi', async (req, res) => {
+  try {
+    const response = await axios.post(process.env.FACE_CAPTURE_API_URL, {
+      uid: "test123"
+    });
+    res.send(response.data);
+  } catch (error) {
+    console.error("❌ Cannot reach Pi:", error.message);
+    res.status(500).send("Pi unreachable");
+  }
 });
