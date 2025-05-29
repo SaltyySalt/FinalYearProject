@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Face Capture Retry</title>
+  <style>
+    body { font-family: Arial; text-align: center; margin-top: 100px; }
+    button { padding: 10px 20px; font-size: 16px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>⚠️ Face Not Detected</h2>
+  <p>Please make sure your face is clearly visible to the camera.</p>
+  <form action="/trigger-face-capture" method="POST">
+    <input type="hidden" name="uid" value="<%= uid %>">
+    <button type="submit">Retry Face Capture</button>
+  </form>
+</body>
+</html>
